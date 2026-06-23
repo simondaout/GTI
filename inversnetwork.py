@@ -278,7 +278,7 @@ class insarstack:
                  av_los=None, av_heading=None,
                  los=False, head=False,
                  tmin=0., tmax=1., weight=1., scale=1., samp=1,
-                 errorfile=None):
+                 errorfile=None, nodata=None):
         self.network    = network
         self.dim        = 1
         self.wdir       = wdir
@@ -292,15 +292,19 @@ class insarstack:
         self.head       = bool(head)
         self.samp       = int(samp)
         self.errorfile  = errorfile   # optional: file with per-pixel uncertainties (x y sigma)
+        self.nodata     = nodata      # optional: numeric nodata sentinel (e.g. 0. or -9999.)
 
         if not self.los and not self.head and av_los is None:
             raise ValueError(
                 f'{network}: provide av_los + av_heading  OR  los=True / head=True')
 
-        self.points = []
-        self.plot   = 'los'
-        self.Ndata  = 0
-        self.Npoint = 0
+        self.points  = []
+        self.plot    = 'los'
+        self.Ndata   = 0
+        self.Npoint  = 0
+        self.grid_x  = None   # full grid coords (valid + NaN), set in load()
+        self.grid_y  = None
+        self.grid_los = None
 
     @staticmethod
     def _proj_from_angles(look_deg, head_deg):
@@ -330,11 +334,13 @@ class insarstack:
             raise ValueError('Invalid file name: ' + fname)
 
         print('Loading interferograms...')
+        # Note: no structured dtype — use float64 so that 'nan' strings written
+        # by gdalwarp (-dstnodata NaN -of XYZ) are parsed as NaN, not 0.
         with open(fname, 'r') as f:
             if self.los and self.head:
                 # cols: x  y  los  look_angle  head_angle
                 x, y, los, look_col, head_col = np.loadtxt(
-                    f, comments='#', unpack=True, dtype='f,f,f,f,f')
+                    f, comments='#', unpack=True)
                 phi   = np.deg2rad(-90. - head_col)
                 theta = np.deg2rad(90.  - look_col)
                 self.projx = np.cos(theta) * np.cos(phi)
@@ -343,7 +349,7 @@ class insarstack:
             elif self.los:
                 # col 4: look_angle; heading from av_heading
                 x, y, los, look_col = np.loadtxt(
-                    f, comments='#', unpack=True, dtype='f,f,f,f')
+                    f, comments='#', unpack=True)
                 phi   = math.radians(-90. - self.av_heading)
                 theta = np.deg2rad(90. - look_col)
                 self.projx = np.cos(theta) * math.cos(phi)
@@ -352,7 +358,7 @@ class insarstack:
             elif self.head:
                 # col 4: head_angle; look from av_los
                 x, y, los, head_col = np.loadtxt(
-                    f, comments='#', unpack=True, dtype='f,f,f,f')
+                    f, comments='#', unpack=True)
                 phi   = np.deg2rad(-90. - head_col)
                 theta = math.radians(90. - self.av_los)
                 self.projx = np.cos(theta) * np.cos(phi)
@@ -360,8 +366,7 @@ class insarstack:
                 self.projz = math.sin(theta) * np.ones(len(x))
             else:
                 # scalar average angles → constant proj
-                x, y, los = np.loadtxt(f, comments='#', unpack=True,
-                                        dtype='f,f,f')
+                x, y, los = np.loadtxt(f, comments='#', unpack=True)
                 px, py, pz = self._proj_from_angles(self.av_los, self.av_heading)
                 self.projx = np.full(len(x), px)
                 self.projy = np.full(len(x), py)
@@ -389,8 +394,7 @@ class insarstack:
             if not path.isfile(efname):
                 raise ValueError('Invalid error file name: ' + efname)
             with open(efname, 'r') as ef:
-                _ex, _ey, _esig = np.loadtxt(ef, comments='#', unpack=True,
-                                              dtype='f,f,f')
+                _ex, _ey, _esig = np.loadtxt(ef, comments='#', unpack=True)
             # apply same spatial filter then subsampling
             _emask = np.nonzero(
                 (_ex < xlim[0]) | (_ex > xlim[1]) | (_ey < ylim[0]) | (_ey > ylim[1])
@@ -402,9 +406,16 @@ class insarstack:
         else:
             sigmad_arr = np.full(len(los), self.sigmad)
 
-        # ── remove NaN pixels (no-data regions must not enter the inversion) ──
-        valid = np.isfinite(los) & np.isfinite(sigmad_arr)
-        # keep NaN coordinates for plotting (transparent overlay)
+        # ── remove NaN / nodata pixels (must not enter the inversion) ──────────
+        # exact zeros come from awk printf("%f", "nan") → 0.000000 conversion
+        valid = np.isfinite(los) & np.isfinite(sigmad_arr) & (los != 0.0)
+        if self.nodata is not None:
+            valid &= (los != self.nodata)
+        # save full grid (valid + NaN) for imshow reconstruction
+        self.grid_x   = x.copy()
+        self.grid_y   = y.copy()
+        self.grid_los = los.copy()          # NaN where no data
+        # keep NaN coordinates for fallback scatter plotting
         self.nan_x = x[~valid].copy()
         self.nan_y = y[~valid].copy()
         if not np.all(valid):

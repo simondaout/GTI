@@ -858,18 +858,11 @@ class inversion:
             ax1, ax2, ax3 = axes[n_idx]
             kw = dict(s=2, rasterized=True, linewidths=0)
 
-            # NaN pixels shown as transparent grey (not modelled)
-            if hasattr(data, 'nan_x') and len(data.nan_x) > 0:
-                _nan_kw = dict(s=2, c='lightgrey', alpha=0.35, rasterized=True,
-                               linewidths=0, zorder=0)
-                for _ax in (ax1, ax2, ax3):
-                    _ax.scatter(data.nan_x, data.nan_y, **_nan_kw)
-
             sc1 = ax1.scatter(x, y, c=los_data,  cmap='RdBu_r', vmin=-vmax,     vmax=vmax,     **kw)
             sc2 = ax2.scatter(x, y, c=los_model, cmap='RdBu_r', vmin=-vmax,     vmax=vmax,     **kw)
             sc3 = ax3.scatter(x, y, c=los_res,   cmap='RdBu_r', vmin=-vmax_res, vmax=vmax_res, **kw)
 
-            # ── data extent for this network (fixes xlim/ylim) ────────────────
+            # ── data extent ───────────────────────────────────────────────────
             _pad = max(x.max() - x.min(), y.max() - y.min()) * 0.03
             _xlim = (x.min() - _pad, x.max() + _pad)
             _ylim = (y.min() - _pad, y.max() + _pad)
@@ -1427,10 +1420,6 @@ if plot_data == 'yes':
         _y   = np.array(_ins.y)
         _los = np.array([_pt.d[0][0] for _pt in _ins.points])
         _vm  = np.nanpercentile(np.abs(_los), 98)
-        # NaN pixels: transparent grey background
-        if hasattr(_ins, 'nan_x') and len(_ins.nan_x) > 0:
-            _ax.scatter(_ins.nan_x, _ins.nan_y, c='lightgrey', alpha=0.35,
-                        s=1, rasterized=True, linewidths=0, zorder=0)
         _sc  = _ax.scatter(_x, _y, c=_los, cmap='RdBu_r',
                            vmin=-_vm, vmax=_vm, s=1, rasterized=True)
         plt.colorbar(_sc, ax=_ax, label='LOS (mm)', shrink=0.7)
