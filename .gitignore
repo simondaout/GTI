@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+*.so
+*.egg-info/
+.DS_Store
+okada4py/build_local/
+okada4py/_okada92*.so
