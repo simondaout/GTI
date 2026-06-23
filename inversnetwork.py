@@ -277,7 +277,8 @@ class insarstack:
     def __init__(self, network, wdir,
                  av_los=None, av_heading=None,
                  los=False, head=False,
-                 tmin=0., tmax=1., weight=1., scale=1., samp=1):
+                 tmin=0., tmax=1., weight=1., scale=1., samp=1,
+                 errorfile=None):
         self.network    = network
         self.dim        = 1
         self.wdir       = wdir
@@ -290,6 +291,7 @@ class insarstack:
         self.los        = bool(los)
         self.head       = bool(head)
         self.samp       = int(samp)
+        self.errorfile  = errorfile   # optional: file with per-pixel uncertainties (x y sigma)
 
         if not self.los and not self.head and av_los is None:
             raise ValueError(
@@ -384,13 +386,33 @@ class insarstack:
         self.x, self.y, losm = np.atleast_1d(x, y, losm)
         self.Ndata = self.Npoint = len(losm)
 
+        # ── per-pixel uncertainties ───────────────────────────────────────────
+        if self.errorfile is not None:
+            efname = self.errorfile if path.isabs(self.errorfile) else self.wdir + self.errorfile
+            print('Error file:', efname)
+            if not path.isfile(efname):
+                raise ValueError('Invalid error file name: ' + efname)
+            with open(efname, 'r') as ef:
+                _ex, _ey, _esig = np.loadtxt(ef, comments='#', unpack=True,
+                                              dtype='f,f,f')
+            # apply same spatial filter then subsampling
+            _emask = np.nonzero(
+                (_ex < xlim[0]) | (_ex > xlim[1]) | (_ey < ylim[0]) | (_ey > ylim[1])
+            )
+            _esig = np.delete(_esig, _emask)
+            if self.samp > 1:
+                _esig = _esig[::self.samp]
+            sigmad_arr = _esig * self.scale
+        else:
+            sigmad_arr = np.full(self.Npoint, self.sigmad)
+
         dt = float(np.squeeze(self.tmax) - np.squeeze(self.tmin))
         for i in range(self.Npoint):
             self.points.append(insarpoint(
                 x[i], y[i],
                 self.scale * losm[i] * dt,
                 [self.projx[i], self.projy[i], self.projz[i]],
-                self.tmin, self.tmax, self.sigmad
+                self.tmin, self.tmax, sigmad_arr[i]
             ))
 
 
