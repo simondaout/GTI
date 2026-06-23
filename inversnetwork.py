@@ -382,10 +382,6 @@ class insarstack:
             self.projy = self.projy[::self.samp]
             self.projz = self.projz[::self.samp]
 
-        losm = los - np.median(los)
-        self.x, self.y, losm = np.atleast_1d(x, y, losm)
-        self.Ndata = self.Npoint = len(losm)
-
         # ── per-pixel uncertainties ───────────────────────────────────────────
         if self.errorfile is not None:
             efname = self.errorfile if path.isabs(self.errorfile) else self.wdir + self.errorfile
@@ -402,9 +398,27 @@ class insarstack:
             _esig = np.delete(_esig, _emask)
             if self.samp > 1:
                 _esig = _esig[::self.samp]
-            sigmad_arr = _esig * self.scale
+            sigmad_arr = _esig.astype(float) * self.scale
         else:
-            sigmad_arr = np.full(self.Npoint, self.sigmad)
+            sigmad_arr = np.full(len(los), self.sigmad)
+
+        # ── remove NaN pixels (no-data regions must not enter the inversion) ──
+        valid = np.isfinite(los) & np.isfinite(sigmad_arr)
+        # keep NaN coordinates for plotting (transparent overlay)
+        self.nan_x = x[~valid].copy()
+        self.nan_y = y[~valid].copy()
+        if not np.all(valid):
+            n_removed = np.sum(~valid)
+            print(f'  Removing {n_removed} NaN/Inf pixels from {self.network}')
+            x, y, los     = x[valid], y[valid], los[valid]
+            self.projx    = self.projx[valid]
+            self.projy    = self.projy[valid]
+            self.projz    = self.projz[valid]
+            sigmad_arr    = sigmad_arr[valid]
+
+        losm = los - np.nanmedian(los)
+        self.x, self.y, losm = np.atleast_1d(x, y, losm)
+        self.Ndata = self.Npoint = len(losm)
 
         dt = float(np.squeeze(self.tmax) - np.squeeze(self.tmin))
         for i in range(self.Npoint):
