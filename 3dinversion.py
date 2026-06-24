@@ -1389,6 +1389,15 @@ class inversion:
             kw_mn = dict(color='black', lw=1.5, zorder=5)
             kw_sh = dict(alpha=0.18, color='black')
 
+            # common y-axis limits across Data / Model / Residual
+            all_vals = np.concatenate([d_sel, m_sel, r_sel])
+            all_vals = all_vals[np.isfinite(all_vals)]
+            if len(all_vals) > 0:
+                _vmax = np.nanpercentile(np.abs(all_vals), 98)
+            else:
+                _vmax = 1.
+            _ylim = (-_vmax * 1.1, _vmax * 1.1)
+
             for ax, sc_vals, mn, sd, title in [
                 (ax1, d_sel, d_mn, d_sd, f'Data — {label}'),
                 (ax2, m_sel, m_mn, m_sd, f'Model — {label}'),
@@ -1400,6 +1409,7 @@ class inversion:
                 ax.axhline(0., color='gray', lw=0.5, ls='--')
                 ax.axvline(0., color='gray', lw=0.5, ls='--')
                 ax.set_xlim(-lhalf, lhalf)
+                ax.set_ylim(_ylim)
                 ax.set_xlabel('Distance along profile (km)', fontsize=9)
                 ax.set_ylabel('LOS (mm/yr)', fontsize=9)
                 ax.set_title(title, fontsize=9)
