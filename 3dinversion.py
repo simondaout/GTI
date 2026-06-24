@@ -1234,6 +1234,185 @@ class inversion:
                     bbox=dict(facecolor='blue', alpha=0.5))
         ax.grid(True)
 
+    def plotProfile(self, profile):
+        """
+        Cross-section profile plot: Data / Model / Residual + fault geometry.
+
+        Parameters
+        ----------
+        profile : dict
+            name   : str   — figure label
+            x, y   : float (km) — profile origin (Easting, Northing)
+            strike : float (°, N-CW) — fault strike; profile is ⊥ to this
+            l      : float (km) — total profile length (plot −l/2 … +l/2)
+            w      : float (km) — selection half-width along strike [default 5]
+            lbins  : float (km) — bin size along profile   [default 1.0]
+        """
+        from matplotlib.gridspec import GridSpec
+
+        name   = profile.get('name', 'Profile')
+        pr_x   = float(profile['x'])        # reference Easting  (km)
+        pr_y   = float(profile['y'])        # reference Northing (km)
+        st_deg = float(profile['strike'])
+        l      = float(profile['l'])        # total profile length (km)
+        lhalf  = l / 2.                     # half-length for windowing
+        w      = float(profile.get('w',     5.))
+        lbins  = float(profile.get('lbins', 1.))
+
+        st_rad = st_deg * np.pi / 180.
+        # Along-strike unit vector (E, N)
+        sv = np.array([np.sin(st_rad), np.cos(st_rad)])
+        # Profile-normal unit vector (cross-strike, E, N)
+        nv = np.array([np.cos(st_rad), -np.sin(st_rad)])
+
+        colors = ['steelblue', 'coral', 'mediumseagreen', 'darkorange', 'purple']
+        bins   = np.arange(-lhalf, lhalf + lbins, lbins)
+        bc     = 0.5 * (bins[:-1] + bins[1:])
+
+        def _bin(yp_arr, vals):
+            """Bin vals by position; return (mean, std) arrays."""
+            mean_arr = np.full(len(bc), np.nan)
+            std_arr  = np.full(len(bc), np.nan)
+            for i, (b0, b1) in enumerate(zip(bins[:-1], bins[1:])):
+                idx = (yp_arr >= b0) & (yp_arr < b1)
+                if idx.sum() >= 2:
+                    mean_arr[i] = np.nanmean(vals[idx])
+                    std_arr[i]  = np.nanstd(vals[idx])
+            return mean_arr, std_arr
+
+        # ── Layout: fault x-section on top, then one row per InSAR network ────
+        n_data_rows = self.ninsar
+        total_rows  = 1 + n_data_rows
+
+        fig = plt.figure(figsize=(14, 3.5 + 4. * n_data_rows))
+        self.nfigure += 1
+
+        gs = GridSpec(total_rows, 3, figure=fig,
+                      height_ratios=[1.5] + [1.] * n_data_rows,
+                      hspace=0.55, wspace=0.35,
+                      left=0.07, right=0.97, top=0.93, bottom=0.07)
+
+        ax_xsec  = fig.add_subplot(gs[0, :])     # spans all 3 columns
+        axes_los = [[fig.add_subplot(gs[i + 1, j]) for j in range(3)]
+                    for i in range(n_data_rows)]
+
+        # ── Fault cross-section ───────────────────────────────────────────────
+        # slip for kernel-0 (interseismic) per patch
+        slip   = np.array([self.m[self.Msurface + self.Mker * k]
+                            for k in range(self.Mpatch)], dtype=float)
+        vmax_s = max(float(np.abs(slip).max()), 1.)
+        norm_s = mpl.colors.Normalize(vmin=0., vmax=vmax_s)
+        cmap_s = cm.hot_r
+
+        k = 0
+        for seg in self.flt.segments:
+            for p in seg.patches:
+                dip_r = p.dip    * np.pi / 180.
+                str_r = p.strike * np.pi / 180.
+                # Along-strike unit vector for this patch (E, N)
+                sv_p  = np.array([np.sin(str_r), np.cos(str_r)])
+                # Down-dip horizontal unit vector (E, N)
+                dd_E  =  np.cos(dip_r) * np.cos(str_r)
+                dd_N  = -np.cos(dip_r) * np.sin(str_r)
+                dd_Z  =  np.sin(dip_r)  # positive downward
+
+                # centre of top edge
+                x2_top = p.x2 + 0.5 * p.length * sv_p[0]
+                x1_top = p.x1 + 0.5 * p.length * sv_p[1]
+                # centre of bottom edge
+                x2_bot = x2_top + p.width * dd_E
+                x1_bot = x1_top + p.width * dd_N
+                z_bot  = p.x3   + p.width * dd_Z
+
+                # project onto profile normal
+                yp_top = (x2_top - pr_x) * nv[0] + (x1_top - pr_y) * nv[1]
+                yp_bot = (x2_bot - pr_x) * nv[0] + (x1_bot - pr_y) * nv[1]
+
+                color_p = cmap_s(norm_s(slip[k]))
+                ax_xsec.plot([yp_top, yp_bot], [-p.x3, -z_bot],
+                             color=color_p, lw=4., solid_capstyle='round')
+                k += 1
+
+        sm_s = cm.ScalarMappable(norm=norm_s, cmap=cmap_s)
+        sm_s.set_array([])
+        fig.colorbar(sm_s, ax=ax_xsec, label='Slip (mm/yr)', shrink=0.7, pad=0.01)
+        ax_xsec.axvline(0., color='gray', lw=0.5, ls='--')
+        ax_xsec.set_xlim(-lhalf, lhalf)
+        ax_xsec.set_xlabel('Distance along profile (km)', fontsize=9)
+        ax_xsec.set_ylabel('Depth (km)', fontsize=9)
+        ax_xsec.set_title(f'Fault cross-section — {name}', fontsize=10)
+        ax_xsec.grid(True, alpha=0.3)
+        ax_xsec.tick_params(labelsize=8)
+
+        # ── InSAR profiles ────────────────────────────────────────────────────
+        Nt = 0
+        for n_idx in range(self.ninsar):
+            data  = self.insar[n_idx]
+            x_E   = np.array(data.x, dtype=float)
+            y_N   = np.array(data.y, dtype=float)
+            Ndata = data.Ndata
+            label = data.network.replace('.xylos', '')
+            color = colors[n_idx % len(colors)]
+
+            # Orbital ramp correction
+            if self.orb == 'yes':
+                orb = (x_E * self.mf[self.M + len(self.orbital) * n_idx + 1]
+                       + y_N * self.mf[self.M + len(self.orbital) * n_idx + 2]
+                       + self.mf[self.M + len(self.orbital) * n_idx])
+            else:
+                orb = np.zeros(Ndata, dtype=float)
+
+            los_data  = self.d[self.Nts + Nt: self.Nts + Nt + Ndata] - orb
+            los_model = self.meval(self.m,
+                                   self.G[self.Nts + Nt: self.Nts + Nt + Ndata, :]) - orb
+            los_res   = los_data - los_model
+
+            # Project onto profile axes
+            dx      = x_E - pr_x
+            dy      = y_N - pr_y
+            xp_pts  = dx * sv[0] + dy * sv[1]   # along-strike (selection)
+            yp_pts  = dx * nv[0] + dy * nv[1]   # cross-strike (plot axis)
+
+            mask   = (np.abs(xp_pts) <= w) & (np.abs(yp_pts) <= lhalf)
+            yp_sel = yp_pts[mask]
+            d_sel  = los_data[mask]
+            m_sel  = los_model[mask]
+            r_sel  = los_res[mask]
+
+            d_mn, d_sd = _bin(yp_sel, d_sel)
+            m_mn, m_sd = _bin(yp_sel, m_sel)
+            r_mn, r_sd = _bin(yp_sel, r_sel)
+
+            ax1, ax2, ax3 = axes_los[n_idx]
+            kw_sc = dict(s=1.5, alpha=0.25, color=color,
+                         rasterized=True, linewidths=0)
+            kw_mn = dict(color='black', lw=1.5, zorder=5)
+            kw_sh = dict(alpha=0.18, color='black')
+
+            for ax, sc_vals, mn, sd, title in [
+                (ax1, d_sel, d_mn, d_sd, f'Data — {label}'),
+                (ax2, m_sel, m_mn, m_sd, f'Model — {label}'),
+                (ax3, r_sel, r_mn, r_sd, f'Residual — {label}'),
+            ]:
+                ax.scatter(yp_sel, sc_vals, **kw_sc)
+                ax.fill_between(bc, mn - sd, mn + sd, **kw_sh)
+                ax.plot(bc, mn, **kw_mn)
+                ax.axhline(0., color='gray', lw=0.5, ls='--')
+                ax.axvline(0., color='gray', lw=0.5, ls='--')
+                ax.set_xlim(-lhalf, lhalf)
+                ax.set_xlabel('Distance along profile (km)', fontsize=9)
+                ax.set_ylabel('LOS (mm/yr)', fontsize=9)
+                ax.set_title(title, fontsize=9)
+                ax.grid(True, alpha=0.3)
+                ax.tick_params(labelsize=8)
+
+            Nt += Ndata
+
+        fig.suptitle(f'GTI profile — {name}', fontsize=11)
+        out_path = os.path.join(self.outputdir, f'profile_{name}.pdf')
+        fig.savefig(out_path, dpi=150, bbox_inches='tight')
+        print(f'Saved: {out_path}')
+
     def plotG(self):
         fig = plt.figure(21)
         plt.title('G options (last 200 rows)')
@@ -1312,6 +1491,8 @@ residual    = _g.get('residual',    'no')
 insarplot   = _g.get('insarplot',   'yes')
 faultplot   = _g.get('faultplot',   'yes')
 plotlos     = _g.get('plotlos',     'no')
+profileplot = _g.get('profileplot', 'no')
+profile     = _g.get('profile',     None)
 x0          = _g.get('x0',         0.)
 y0          = _g.get('y0',         0.)
 name0       = _g.get('name0',      'Origin')
@@ -1443,6 +1624,35 @@ if plot_data == 'yes':
             for _ig in range(len(_fx)):
                 _ax.plot(_fx[_ig], _fy[_ig], color=_gf.color, lw=_gf.width, zorder=4)
 
+        # ── Profile trace ──────────────────────────────────────────────────────
+        if profile is not None:
+            _pr_x   = float(profile['x'])
+            _pr_y   = float(profile['y'])
+            _st_r   = float(profile['strike']) * np.pi / 180.
+            _lhalf  = float(profile['l']) / 2.
+            _w_half = float(profile.get('w', 5.))
+            # profile-normal unit vector (E, N)
+            _nv = np.array([np.cos(_st_r), -np.sin(_st_r)])
+            # along-strike unit vector (E, N)
+            _sv = np.array([np.sin(_st_r),  np.cos(_st_r)])
+            # profile centre line
+            _p0 = np.array([_pr_x, _pr_y]) - _lhalf * _nv
+            _p1 = np.array([_pr_x, _pr_y]) + _lhalf * _nv
+            _ax.plot([_p0[0], _p1[0]], [_p0[1], _p1[1]],
+                     color='gold', lw=2., zorder=6, label=profile.get('name', 'Profile'))
+            # selection box corners
+            _box = np.array([
+                _p0 - _w_half * _sv,
+                _p1 - _w_half * _sv,
+                _p1 + _w_half * _sv,
+                _p0 + _w_half * _sv,
+                _p0 - _w_half * _sv,
+            ])
+            _ax.plot(_box[:, 0], _box[:, 1],
+                     color='gold', lw=0.8, ls='--', zorder=6)
+            _ax.plot(_pr_x, _pr_y, '+', color='gold', ms=8, mew=2., zorder=7)
+            _ax.legend(loc='lower right', fontsize=7, framealpha=0.7)
+
         # force extent to InSAR data after all overlays
         _ax.set_xlim(_xlim_d)
         _ax.set_ylim(_ylim_d)
@@ -1493,6 +1703,11 @@ if insarplot == 'yes': inv.plotInSAR(x0, y0, name0)
 if faultplot == 'yes':
     inv.plotRes()
     inv.plot3D()
-if plotlos   == 'yes': inv.plotlos()
+if plotlos      == 'yes': inv.plotlos()
+if profileplot  == 'yes':
+    if profile is None:
+        print('[warn] profileplot=yes but no profile dict defined in input — skipping')
+    else:
+        inv.plotProfile(profile)
 
 plt.show()
